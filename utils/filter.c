@@ -16,12 +16,16 @@
 #include "utils/utils.h"
 #include "utils/list.h"
 #include "utils/auto-args.h"
+#include "utils/dwarf.h"
 
 /* RB-tree maintaining automatic arguments and return value */
 static struct rb_root auto_argspec = RB_ROOT;
 static struct rb_root auto_retspec = RB_ROOT;
 
 static struct uftrace_filter * find_auto_args(struct rb_root *root, char *name);
+static int parse_argument_spec(char *, struct uftrace_trigger *);
+static int parse_float_argument_spec(char *, struct uftrace_trigger *);
+static int parse_retval_spec(char *, struct uftrace_trigger *);
 
 static void snprintf_trigger_read(char *buf, size_t len,
 				  enum trigger_read_type type)
@@ -218,23 +222,79 @@ static void add_trigger(struct uftrace_filter *filter, struct uftrace_trigger *t
 }
 
 static int add_filter(struct rb_root *root, struct uftrace_filter *filter,
-		       struct uftrace_trigger *tr, bool exact_match)
+		      struct uftrace_trigger *tr, bool exact_match,
+		      struct debug_info *dinfo)
 {
 	struct rb_node *parent = NULL;
 	struct rb_node **p = &root->rb_node;
 	struct uftrace_filter *iter, *new;
-	struct uftrace_filter *auto_arg = NULL;
-	struct uftrace_filter *auto_ret = NULL;
+	struct uftrace_trigger *auto_arg = NULL;
+	struct uftrace_trigger *auto_ret = NULL;
+	struct uftrace_trigger dwarf_arg;
+	struct uftrace_trigger dwarf_ret;
+	LIST_HEAD(dwarf_argspec);
+	LIST_HEAD(dwarf_retspec);
+	struct uftrace_arg_spec *spec, *tmp;
 	unsigned long orig_flags = tr->flags;  /* restored for regex filter */
 
 	if ((tr->flags & TRIGGER_FL_ARGUMENT) && list_empty(tr->pargs)) {
-		auto_arg = find_auto_args(&auto_argspec, filter->name);
+		char *argspec, *pos, *saved;
+
+		memset(&dwarf_arg, 0, sizeof(dwarf_arg));
+		dwarf_arg.pargs = &dwarf_argspec;
+
+		/* try to extrace argspec from dwarf first */
+		saved = argspec = get_dwarf_argspec(dinfo, filter->name, filter->start);
+		while ((pos = strsep(&argspec, ",")) != NULL) {
+			if (!strncmp(pos, "arg", 3))
+				parse_argument_spec(pos, &dwarf_arg);
+			else if (!strncmp(pos, "fparg", 5))
+				parse_float_argument_spec(pos, &dwarf_arg);
+		}
+		free(saved);
+
+		if (!list_empty(&dwarf_argspec))
+			auto_arg = &dwarf_arg;
+
+		/* not found: try auto-args */
+		if (auto_arg == NULL) {
+			struct uftrace_filter *entry;
+
+			entry = find_auto_args(&auto_argspec, filter->name);
+			if (entry)
+				auto_arg = &entry->trigger;
+		}
+
 		if (auto_arg == NULL)
 			tr->flags &= ~TRIGGER_FL_ARGUMENT;
 	}
 	if ((tr->flags & TRIGGER_FL_RETVAL) && list_empty(tr->pargs)) {
-		auto_arg = find_auto_args(&auto_retspec, filter->name);
-		if (auto_arg == NULL)
+		char *retspec, *pos, *saved;
+
+		memset(&dwarf_ret, 0, sizeof(dwarf_ret));
+		dwarf_ret.pargs = &dwarf_retspec;
+
+		/* try to extrace retspec from dwarf first */
+		saved = retspec = get_dwarf_retspec(dinfo, filter->name, filter->start);
+		while ((pos = strsep(&retspec, ",")) != NULL) {
+			if (!strncmp(pos, "retval", 6))
+				parse_retval_spec(pos, &dwarf_ret);
+		}
+		free(saved);
+
+		if (!list_empty(&dwarf_retspec))
+			auto_ret = &dwarf_ret;
+
+		/* not found: try auto-args */
+		if (auto_ret == NULL) {
+			struct uftrace_filter *entry;
+
+			entry = find_auto_args(&auto_retspec, filter->name);
+			if (entry)
+				auto_ret = &entry->trigger;
+		}
+
+		if (auto_ret == NULL)
 			tr->flags &= ~TRIGGER_FL_RETVAL;
 	}
 
@@ -254,10 +314,19 @@ static int add_filter(struct rb_root *root, struct uftrace_filter *filter,
 		if (iter->start == filter->start) {
 			add_trigger(iter, tr, exact_match);
 			if (auto_arg)
-				add_trigger(iter, &auto_arg->trigger, exact_match);
+				add_trigger(iter, auto_arg, exact_match);
 			if (auto_ret)
-				add_trigger(iter, &auto_ret->trigger, exact_match);
+				add_trigger(iter, auto_ret, exact_match);
 			tr->flags = orig_flags;
+
+			list_for_each_entry_safe(spec, tmp, &dwarf_argspec, list) {
+				list_del(&spec->list);
+				free(spec);
+			}
+			list_for_each_entry_safe(spec, tmp, &dwarf_retspec, list) {
+				list_del(&spec->list);
+				free(spec);
+			}
 			return 1;
 		}
 
@@ -275,10 +344,19 @@ static int add_filter(struct rb_root *root, struct uftrace_filter *filter,
 
 	add_trigger(new, tr, exact_match);
 	if (auto_arg)
-		add_trigger(new, &auto_arg->trigger, exact_match);
+		add_trigger(new, auto_arg, exact_match);
 	if (auto_ret)
-		add_trigger(new, &auto_ret->trigger, exact_match);
+		add_trigger(new, auto_ret, exact_match);
 	tr->flags = orig_flags;
+
+	list_for_each_entry_safe(spec, tmp, &dwarf_argspec, list) {
+		list_del(&spec->list);
+		free(spec);
+	}
+	list_for_each_entry_safe(spec, tmp, &dwarf_retspec, list) {
+		list_del(&spec->list);
+		free(spec);
+	}
 
 	rb_link_node(&new->node, parent, p);
 	rb_insert_color(&new->node, root);
@@ -286,7 +364,8 @@ static int add_filter(struct rb_root *root, struct uftrace_filter *filter,
 }
 
 static int add_exact_filter(struct rb_root *root, struct symtab *symtab,
-			    char *filter_str, struct uftrace_trigger *tr)
+			    char *filter_str, struct uftrace_trigger *tr,
+			    struct debug_info *dinfo)
 {
 	struct uftrace_filter filter;
 	struct sym *sym;
@@ -299,11 +378,12 @@ static int add_exact_filter(struct rb_root *root, struct symtab *symtab,
 	filter.start = sym->addr;
 	filter.end = sym->addr + sym->size;
 
-	return add_filter(root, &filter, tr, true);
+	return add_filter(root, &filter, tr, true, dinfo);
 }
 
 static int add_regex_filter(struct rb_root *root, struct symtab *symtab,
-			    char *filter_str, struct uftrace_trigger *tr)
+			    char *filter_str, struct uftrace_trigger *tr,
+			    struct debug_info *dinfo)
 {
 	struct uftrace_filter filter;
 	struct sym *sym;
@@ -326,7 +406,7 @@ static int add_regex_filter(struct rb_root *root, struct symtab *symtab,
 		filter.start = sym->addr;
 		filter.end = sym->addr + sym->size;
 
-		ret += add_filter(root, &filter, tr, false);
+		ret += add_filter(root, &filter, tr, false, dinfo);
 	}
 
 	regfree(&re);
@@ -772,12 +852,13 @@ out:
 
 static int add_trigger_entry(struct rb_root *root, struct symtab *symtab,
 			     char *name, bool is_regex,
-			     struct uftrace_trigger *tr)
+			     struct uftrace_trigger *tr,
+			     struct debug_info *dinfo)
 {
 	if (is_regex)
-		return add_regex_filter(root, symtab, name, tr);
+		return add_regex_filter(root, symtab, name, tr, dinfo);
 	else
-		return add_exact_filter(root, symtab, name, tr);
+		return add_exact_filter(root, symtab, name, tr, dinfo);
 }
 
 static void setup_trigger(char *filter_str, struct symtabs *symtabs,
@@ -786,6 +867,7 @@ static void setup_trigger(char *filter_str, struct symtabs *symtabs,
 {
 	char *str;
 	char *pos, *name;
+	struct debug_info dinfo = {};
 
 	if (filter_str == NULL)
 		return;
@@ -793,6 +875,10 @@ static void setup_trigger(char *filter_str, struct symtabs *symtabs,
 	pos = str = strdup(filter_str);
 	if (str == NULL)
 		return;
+
+	if (flags & (TRIGGER_FL_ARGUMENT | TRIGGER_FL_RETVAL))
+		setup_debug_info(symtabs->filename, &dinfo,
+				 symtabs->maps->start);
 
 	name = strtok(pos, ";");
 	while (name) {
@@ -836,17 +922,21 @@ static void setup_trigger(char *filter_str, struct symtabs *symtabs,
 			if (!strncmp(module, basename(symtabs->filename),
 				     strlen(module))) {
 				ret += add_trigger_entry(root, &symtabs->symtab,
-							 name, is_regex, &tr);
+							 name, is_regex, &tr,
+							 &dinfo);
 				ret += add_trigger_entry(root, &symtabs->dsymtab,
-							 name, is_regex, &tr);
+							 name, is_regex, &tr,
+							 &dinfo);
 			}
 			else if (!strcasecmp(module, "PLT")) {
 				ret = add_trigger_entry(root, &symtabs->dsymtab,
-							name, is_regex, &tr);
+							name, is_regex, &tr,
+							&dinfo);
 			}
 			else {
 				ret = add_trigger_entry(root, &map->symtab,
-							name, is_regex, &tr);
+							name, is_regex, &tr,
+							&dinfo);
 			}
 
 			free(module);
@@ -854,15 +944,16 @@ static void setup_trigger(char *filter_str, struct symtabs *symtabs,
 		else {
 			/* check main executable's symtab first */
 			ret += add_trigger_entry(root, &symtabs->symtab, name,
-						 is_regex, &tr);
+						 is_regex, &tr, &dinfo);
 			ret += add_trigger_entry(root, &symtabs->dsymtab, name,
-						 is_regex, &tr);
+						 is_regex, &tr, &dinfo);
 
 			/* and then find all module's symtabs */
 			map = symtabs->maps;
 			while (map) {
 				ret += add_trigger_entry(root, &map->symtab,
-							 name, is_regex, &tr);
+							 name, is_regex, &tr,
+							 &dinfo);
 				map = map->next;
 			}
 		}
@@ -884,6 +975,7 @@ next:
 
 	}
 
+	release_debug_info(&dinfo);
 	free(str);
 }
 
