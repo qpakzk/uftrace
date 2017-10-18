@@ -663,7 +663,7 @@ static int fill_arg_spec(void *arg)
 	int n;
 
 	n = extract_trigger_args(&argspec, &retspec, fha->opts->trigger);
-	if (n == 0)
+	if (n == 0 && !fha->opts->auto_args)
 		return -1;
 
 	dprintf(fha->fd, "argspec:lines=%d\n", n + 2);
