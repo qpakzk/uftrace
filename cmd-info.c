@@ -700,6 +700,10 @@ static int fill_arg_spec(void *arg)
 		argspec = strjoin(argspec, fha->opts->args, ";");
 	if (fha->opts->retval)
 		retspec = strjoin(retspec, fha->opts->retval, ";");
+	if (fha->opts->auto_args) {
+		argspec = strjoin(argspec, ".", ";");
+		retspec = strjoin(retspec, ".", ";");
+	}
 
 	n = !!argspec + !!retspec;
 	if (n == 0)

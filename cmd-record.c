@@ -135,8 +135,11 @@ static void setup_child_environ(struct opts *opts, int pfd)
 		}
 	}
 
-	if (opts->args) {
+	if (opts->args || opts->auto_args) {
 		char *arg_str = uftrace_clear_kernel(opts->args);
+
+		if (opts->auto_args)
+			arg_str = strjoin(arg_str, ".", ";");
 
 		if (arg_str) {
 			setenv("UFTRACE_ARGUMENT", arg_str, 1);
@@ -144,8 +147,11 @@ static void setup_child_environ(struct opts *opts, int pfd)
 		}
 	}
 
-	if (opts->retval) {
+	if (opts->retval || opts->auto_args) {
 		char *retval_str = uftrace_clear_kernel(opts->retval);
+
+		if (opts->auto_args)
+			retval_str = strjoin(retval_str, ".", ";");
 
 		if (retval_str) {
 			setenv("UFTRACE_RETVAL", retval_str, 1);
@@ -300,10 +306,10 @@ static uint64_t calc_feat_mask(struct opts *opts)
 	if (opts->kernel)
 		features |= KERNEL;
 
-	if (opts->args)
+	if (opts->args || opts->auto_args)
 		features |= ARGUMENT;
 
-	if (opts->retval)
+	if (opts->retval || opts->auto_args)
 		features |= RETVAL;
 
 	if (opts->event)
