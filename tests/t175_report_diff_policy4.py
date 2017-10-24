@@ -16,10 +16,10 @@ class TestCase(TestBase):
 #
    Total time     Self time         Calls   Function
   ===========   ===========   ===========   ================================================
-    +0.027 us     +0.027 us             0   atoi
-  +158.853 us     +1.319 us             0   bar
-    +1.235 ms     +2.749 us             0   foo
-    +1.305 ms     +0.319 us             0   main
+    +0.027 us     +0.027 us            +0   atoi
+  +158.853 us     +1.319 us            +0   bar
+    +1.235 ms     +2.749 us            +0   foo
+    +1.305 ms     +0.319 us            +0   main
     +1.300 ms     +1.300 ms            +3   usleep
 """)
 
