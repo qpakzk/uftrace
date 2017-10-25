@@ -34,9 +34,6 @@ OPTIONS
 \--diff=*DATA*
 :   Report differences between the input trace data and the given DATA.
 
-\--sort-column=*IDX*
-:   When `--diff` is used, 3 columns will be shown: total time, self time and call count.  This option selects the index of the column to be used as a sort key.  Index 0 is for original data given by the `--data` option, index 1 is for data given by the `--diff` option, and index 2 is for (percentage) differences between the two data.
-
 -k, \--kernel
 :   Show kernel functions as well as user functions.  Only kernel functions called inside user functions will be shown.  Note that this option is set by default and always shows kernel functions if exist.
 
@@ -68,7 +65,10 @@ OPTIONS
 :   Only show functions executed within the time RANGE.  The RANGE can be \<start\>~\<stop\> (separated by "~") and one of \<start\> and \<stop\> can be omitted.  The \<start\> and \<stop\> are timestamp or elapsed time if they have \<time_unit\> postfix, for example '100us'.  The timestamp or elapsed time can be shown with `-f time` or `-f elapsed` option respectively in `uftrace replay`(1).
 
 \--diff-policy=*POLICY*
-:   Apply custom diff policy.  Available values are: "abs", "no-abs", "percent", "no-percent".  The "abs" is to sort diff result using absolute value so positvie and negative entries can be shown together while "no-abs" will show positive entries first and then negative ones.  The "percent" is to show diff in percentage while "no-percent" is to show the values.  The default is "abs" and "no-percent".
+:   Apply custom diff policy.  Available values are: "abs", "no-abs", "percent", "no-percent", "compact" and "full".  The "abs" is to sort diff result using absolute value so positvie and negative entries can be shown together while "no-abs" will show positive entries first and then negative ones.  The "percent" is to show diff in percentage while "no-percent" is to show the values.  The "full" is to show all three columns of baseline, new data and difference while "compact" only shows the difference.  The default is "abs", "full" and "no-percent".
+
+\--sort-column=*IDX*
+:   When `--diff` is used with "full" policy, 3 columns will be shown: total time, self time and call count.  This option selects the index of the column to be used as a sort key.  Index 0 is for original data given by the `--data` option, index 1 is for data given by the `--diff` option, and index 2 is for (percentage) differences between the two data.
 
 \--event-full
 :   Show all (user) events outside of user functions.
@@ -149,6 +149,23 @@ In the above example, the result was sorted by absolute value of differences of 
         0.767 us    0.706 us    -7.95%     0.767 us    0.706 us    -7.95%            1          1         +0   getpid
 
 In the above example, the result was sorted by total time of the base data.
+
+The compact output looks like below:
+
+    $ uftrace report --diff uftrace.data.old --diff-policy compact
+    #
+    # uftrace diff
+    #  [0] base: uftrace.data       (from uftrace record abc )
+    #  [1] diff: uftrace.data.old   (from uftrace record abc )
+    #
+      Total time   Self time       Calls  Function
+      ==========  ==========  ==========  =======================================
+       -0.301 us   -0.038 us          +0  main
+       -0.263 us   -0.070 us          +0  a
+       -0.193 us   -0.042 us          +0  b
+       -0.151 us   -0.090 us          +0  c
+       -0.131 us   -0.131 us          +0  __cxa_atexit
+       -0.061 us   -0.061 us          +0  getpid
 
 
 SEE ALSO
