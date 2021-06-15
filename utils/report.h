@@ -30,6 +30,8 @@ struct uftrace_report_node {
 	struct report_time_stat 	self;
 	struct debug_location		*loc;
 	uint64_t			call;
+	uint64_t			parent;
+	uint64_t			child;
 	struct rb_node			name_link;
 	struct rb_node			sort_link;
 
